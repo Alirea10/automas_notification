@@ -1,4 +1,4 @@
-# automas_plugin_notification
+# automas_notification
 
 `notification` 是 AUTO-MAS 的通知编排插件。它提供 `notify` 服务，负责统一生成通知 payload、管理通道注册，并把通知分发给所有已注册的通道插件。
 
