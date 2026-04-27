@@ -57,6 +57,7 @@ class NotifyService:
         kind: str = "generic",
         serverchan_content: str | None = None,
         koishi_message: str | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, bool]:
         payload = {
             "kind": kind,
@@ -66,6 +67,7 @@ class NotifyService:
             "serverchan_content": serverchan_content or text,
             "koishi_message": koishi_message or f"{title}\n\n{text}",
             "signature": self.config.signature,
+            "extra": extra or {},
         }
         return await self._broadcast(payload)
 
