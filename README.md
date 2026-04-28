@@ -1,24 +1,26 @@
 # automas_notification
 
-`notification` 是 AUTO-MAS 的通知编排插件。它提供 `notify` 服务，负责统一生成通知 payload、管理通道注册，并把通知分发给所有已注册的通道插件。
+`notification` 是 AUTO-MAS 的通知编排插件。它提供 `notify` 服务，负责生成统一通知 payload、管理通知通道注册，并把同一条通知分发给所有已注册的通道插件。
 
 具体发送逻辑不在本插件内实现。邮件、系统通知、ServerChan、Webhook、Koishi 等发送能力由独立通道插件提供。
 
 ## 服务声明
+
+主插件提供 `notify` 服务：
 
 ```python
 class Plugin:
     provides = "notify"
 ```
 
-其他插件需要使用通知服务时，应声明：
+其他插件需要使用通知服务时，声明依赖：
 
 ```python
 class Plugin:
     needs = "notify"
 ```
 
-然后通过 `self.ctx.get("notify")` 获取服务实例。
+启动后通过 `self.ctx.get("notify")` 获取服务实例。
 
 ## 通道注册
 
@@ -33,27 +35,65 @@ notify.register_channel("system", self.channel)
 
 ```python
 notify = self.ctx.get("notify")
-notify.unregister_channel("system")
+if notify is not None:
+    notify.unregister_channel("system")
 ```
 
-通道对象必须提供异步 `send(payload: dict) -> bool` 方法。返回 `True` 表示发送成功，返回 `False` 表示该通道未发送或发送失败。抛出的异常会被 `notification` 捕获并记录为失败。
+通道对象必须提供异步方法：
 
-## 通用广播接口
+```python
+async def send(self, payload: dict) -> bool:
+    ...
+```
 
-推荐新代码使用统一接口：
+返回 `True` 表示该通道发送成功，返回 `False` 表示未发送或发送失败。通道抛出的异常会被 `notification` 捕获并记录为失败，不会阻断其他通道。
+
+## 通用发送接口
+
+推荐新代码使用 `notify.send(...)`：
 
 ```python
 await notify.send(
-    title="AUTO-MAS 通知",
-    text="通知正文",
-    kind="generic",
-    serverchan_content=None,
-    koishi_message=None,
-    data={"代理成功": True, "代理用户": "user@example.com"},
+    title="代理完成",
+    text="代理任务已完成",
+    kind="proxy_result",
+    data={
+        "代理成功": True,
+        "代理用户": "username",
+        "任务名称": "舟官xxx",
+    },
+    extra={
+        "logs": [
+            {
+                "name": "proxy.log",
+                "content": "任务启动\n任务完成",
+                "level": "info",
+                "format": "text",
+            }
+        ],
+        "images": [
+            {
+                "name": "screenshot.png",
+                "path": "D:/Dev/AUTO-MAS/debug/screenshot.png",
+                "mime": "image/png",
+                "caption": "任务截图",
+            }
+        ],
+        "attachments": [
+            {
+                "name": "detail.json",
+                "path": "D:/Dev/AUTO-MAS/debug/detail.json",
+                "mime": "application/json",
+            }
+        ],
+        "metadata": {
+            "run_id": "20260428-001",
+        },
+    },
 )
 ```
 
-该接口会广播给所有已注册通道，返回值是通道名到发送结果的映射：
+返回值是通道名到发送结果的映射：
 
 ```python
 {
@@ -63,22 +103,31 @@ await notify.send(
 }
 ```
 
-如果没有可用通道，返回 `{}`。
+如果没有可用通道，返回 `{}`，并记录“无可用通知通道”日志。
 
 ## 通用 payload
 
-广播时，`notification` 会构造如下 payload：
+`notify.send(...)` 会生成如下 payload：
 
 ```python
 {
-    "kind": "generic",
-    "title": "AUTO-MAS 通知",
-    "text": "通知正文",
-    "serverchan_content": "通知正文",
-    "koishi_message": "AUTO-MAS 通知\n\n通知正文",
+    "kind": "proxy_result",
+    "title": "代理完成",
+    "text": "代理任务已完成",
+    "serverchan_content": "代理任务已完成",
+    "koishi_message": "代理完成\n\n代理任务已完成",
     "signature": "AUTO-MAS 敬上",
-    "data": {"代理成功": True, "代理用户": "user@example.com"},
-    "extra": {},
+    "data": {
+        "代理成功": True,
+        "代理用户": "user@example.com",
+        "任务名称": "AutoProxy",
+    },
+    "extra": {
+        "logs": [],
+        "images": [],
+        "attachments": [],
+        "metadata": {},
+    },
 }
 ```
 
@@ -86,43 +135,82 @@ await notify.send(
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `kind` | `str` | 通知类型。常见值有 `generic`、`test`、`mail`、`system`、`serverchan`、`webhook`、`legacy_webhook`、`webhook_image`、`koishi`。通道可按需区分处理。 |
-| `title` | `str` | 通知标题。大多数通道都应使用。 |
-| `text` | `str` | 纯文本正文。通道的基础兜底内容。 |
-| `serverchan_content` | `str` | ServerChan 使用的正文。未显式传入时等于 `text`。 |
-| `koishi_message` | `str` | Koishi 使用的消息文本。未显式传入时为 `"{title}\n\n{text}"`。 |
+| `kind` | `str` | 通知语义类型，例如 `generic`、`test`、`proxy_result`。它描述业务语义，不应该因为携带日志或图片而变成新的类型。 |
+| `title` | `str` | 通知标题。大多数通道都应该使用。 |
+| `text` | `str` | 纯文本正文，是所有通道的基础兜底内容。 |
+| `serverchan_content` | `str` | ServerChan 默认正文。未显式传入时等于 `text`。 |
+| `koishi_message` | `str` | Koishi 默认消息。未显式传入时为 `"{title}\n\n{text}"`。 |
 | `signature` | `str` | 统一通知署名，来自 `notification` 插件配置。 |
-| `data` | `dict` | 结构化语义字段，例如代理是否成功、代理用户、任务名等。具体展示方式由通道决定。 |
-| `extra` | `dict` | 日志、图片、附件等补充内容。 |
+| `data` | `dict` | 结构化业务信息，供通道自行渲染。主插件不解释其含义。 |
+| `extra` | `dict` | 日志、图片、附件和元数据等补充内容。通道按自身能力处理。 |
 
-通道实现应该优先读取自己关心的字段，并对缺失字段使用合理兜底。例如系统通知通道读取 `title` 和 `text`，邮件通道根据 `title`、`text` 和 `data` 自行渲染邮件内容，ServerChan 通道读取 `serverchan_content`。
+## `data` 与 `extra` 的区别
 
-## 测试通知 payload
+`data` 用来描述业务字段，适合被通道渲染成表格、键值列表、Markdown 字段或平台专用消息。例如：
 
-`send_test_notification()` 会发送 `kind="test"` 的广播通知，用于测试所有通道是否可用：
+```python
+data={
+    "代理成功": True,
+    "代理用户": "user@example.com",
+    "失败数量": 0,
+}
+```
+
+`extra` 用来携带补充材料，适合追加到正文后或作为附件发送。约定结构如下：
+
+```python
+extra={
+    "logs": [
+        {
+            "name": "task.log",
+            "content": "日志内容",
+            "level": "info",
+            "format": "text",
+        }
+    ],
+    "images": [
+        {
+            "name": "screenshot.png",
+            "path": "D:/path/screenshot.png",
+            "mime": "image/png",
+            "caption": "任务截图",
+        }
+    ],
+    "attachments": [
+        {
+            "name": "detail.json",
+            "path": "D:/path/detail.json",
+            "mime": "application/json",
+        }
+    ],
+    "metadata": {
+        "run_id": "abc123",
+    },
+}
+```
+
+处理建议：
+
+- SMTP 邮件通道：把日志追加到正文后，长日志可作为 `.txt` 附件；图片和普通附件作为 MIME 附件发送。
+- 系统通知通道：把短日志摘要追加到通知正文；图片和附件只显示名称或忽略。
+- Webhook、ServerChan、Koishi 通道：把日志摘要、图片名称、附件路径等追加到原消息后；如果平台后续支持文件上传，可在对应通道内部增强。
+- 不支持某类 `extra` 的通道必须安全忽略，不能影响主通知发送。
+
+## 测试通知
+
+`send_test_notification()` 会发送 `kind="test"` 的广播通知，用于测试所有已注册通道是否可用：
 
 ```python
 await notify.send_test_notification()
 ```
 
-该方法内部仍走 `notify.send(...)`，所以所有通道收到的仍是通用 payload，只是：
+该方法内部仍走 `notify.send(...)`，所以所有通道收到的仍是通用 payload。
 
-```python
-{
-    "kind": "test",
-    "title": "AUTO-MAS 测试通知",
-    "text": "...测试信息...",
-    "serverchan_content": "...测试信息...\n\nAUTO-MAS 敬上",
-    "koishi_message": "AUTO-MAS 测试通知\n\n...测试信息...\n\nAUTO-MAS 敬上",
-    "signature": "AUTO-MAS 敬上",
-}
-```
+## 兼容型通道（暂存，确认不影响后再删除）
 
-## 兼容层定向接口
+主服务还提供若干定向通道接口，用于明确只发送到某一个通道。这些接口不实现具体发送逻辑，只把参数包装成对应通道的 payload，然后调用指定通道。
 
-为了兼容旧的 `app/services/notification.py::Notify` API，`notification` 暂时保留了一组 `send_xxx` 方法。它们不实现具体发送逻辑，只是把旧参数包装成 payload，再转发到指定通道。
-
-这些方法是迁移期兼容接口，新代码应优先使用 `notify.send(...)`。
+新业务代码优先使用 `notify.send(...)`。只有在确实需要只调用某个通道的专有能力时，才使用这些定向接口。
 
 ### `send_system`
 
@@ -135,7 +223,7 @@ await notify.send_system(
 )
 ```
 
-发送到 `system` 通道，payload：
+发送到 `system` 通道：
 
 ```python
 {
@@ -158,7 +246,7 @@ await notify.send_mail(
 )
 ```
 
-发送到 `mail` 通道，payload：
+发送到 `mail` 通道：
 
 ```python
 {
@@ -170,7 +258,7 @@ await notify.send_mail(
 }
 ```
 
-`mail_content` 是 mail 通道的兼容专用字段。普通广播通知不会携带 HTML 正文，邮件通道会根据 `title`、`text`、`data`、`signature` 和 `extra` 自行渲染 HTML 或纯文本。
+`mail_content` 是邮件通道专用字段，只在显式定向调用邮件通道时使用。普通广播通知不会携带 HTML 正文，邮件通道会自行生成 HTML 或纯文本内容。
 
 ### `send_serverchan`
 
@@ -182,7 +270,7 @@ await notify.send_serverchan(
 )
 ```
 
-发送到 `serverchan` 通道，payload：
+发送到 `serverchan` 通道：
 
 ```python
 {
@@ -203,7 +291,7 @@ await notify.send_webhook(
 )
 ```
 
-发送到 `webhook` 通道，payload：
+发送到 `webhook` 通道：
 
 ```python
 {
@@ -214,7 +302,7 @@ await notify.send_webhook(
 }
 ```
 
-`webhook` 字段通常是旧配置模型对象或类似对象，由 `notification_webhook` 负责解释。
+`webhook` 字段由 `notification_webhook` 通道解释。
 
 ### `send_legacy_webhook`
 
@@ -226,7 +314,7 @@ await notify.send_legacy_webhook(
 )
 ```
 
-发送到 `webhook` 通道，payload：
+发送到 `webhook` 通道：
 
 ```python
 {
@@ -246,7 +334,7 @@ await notify.send_webhook_image(
 )
 ```
 
-发送到 `webhook` 通道，payload：
+发送到 `webhook` 通道：
 
 ```python
 {
@@ -266,7 +354,7 @@ await notify.send_koishi(
 )
 ```
 
-发送到 `koishi` 通道，payload：
+发送到 `koishi` 通道：
 
 ```python
 {
@@ -293,12 +381,15 @@ class MyChannel:
 
         title = str(payload.get("title") or "AUTO-MAS 通知")
         text = str(payload.get("text") or "")
-        # 在这里执行具体发送逻辑
-        self.ctx.logger.info(f"sent: {title} {text}")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+
+        # 在这里根据通道能力渲染 title、text、data 和 extra。
+        self.ctx.logger.info(f"sent: {title} {text} data={data} extra={extra}")
         return True
 ```
 
-通道插件：
+通道插件结构：
 
 ```python
 class Plugin:
@@ -326,14 +417,13 @@ class Plugin:
 - 管理通道注册和注销。
 - 生成统一 payload。
 - 广播通知并聚合各通道结果。
-- 保留旧通知 API 的兼容包装。
+- 保存通知策略配置，例如任务结果、统计信息、高价值结果是否需要通知。
 
 通道插件负责：
 
-- 管理自己的配置。
+- 管理自身配置。
 - 解释自己关心的 payload 字段。
-- 按自身能力渲染格式，例如邮件通道自行生成 HTML，Koishi/Webhook 自行生成平台消息。
+- 按自身能力渲染格式，例如邮件通道生成 HTML，Koishi 和 Webhook 生成平台消息。
 - 执行具体发送逻辑。
 - 返回布尔发送结果。
 
-旧兼容方法后续可以逐步迁移到更通用的 `notify.send(...)` 调用，但在迁移完成前会继续保留。
