@@ -53,20 +53,20 @@ class NotifyService:
         *,
         title: str,
         text: str,
-        html: str | None = None,
         kind: str = "generic",
         serverchan_content: str | None = None,
         koishi_message: str | None = None,
+        data: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, bool]:
         payload = {
             "kind": kind,
             "title": title,
             "text": text,
-            "html": html,
             "serverchan_content": serverchan_content or text,
             "koishi_message": koishi_message or f"{title}\n\n{text}",
             "signature": self.config.signature,
+            "data": data or {},
             "extra": extra or {},
         }
         return await self._broadcast(payload)
@@ -112,8 +112,7 @@ class NotifyService:
             "kind": "mail",
             "title": title,
             "mail_mode": mode,
-            "html": content if mode == "网页" else None,
-            "text": content,
+            "mail_content": content,
             "to_address": to_address,
         })
 

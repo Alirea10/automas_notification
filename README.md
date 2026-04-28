@@ -46,10 +46,10 @@ notify.unregister_channel("system")
 await notify.send(
     title="AUTO-MAS 通知",
     text="通知正文",
-    html=None,
     kind="generic",
     serverchan_content=None,
     koishi_message=None,
+    data={"代理成功": True, "代理用户": "user@example.com"},
 )
 ```
 
@@ -74,10 +74,11 @@ await notify.send(
     "kind": "generic",
     "title": "AUTO-MAS 通知",
     "text": "通知正文",
-    "html": None,
     "serverchan_content": "通知正文",
     "koishi_message": "AUTO-MAS 通知\n\n通知正文",
     "signature": "AUTO-MAS 敬上",
+    "data": {"代理成功": True, "代理用户": "user@example.com"},
+    "extra": {},
 }
 ```
 
@@ -88,12 +89,13 @@ await notify.send(
 | `kind` | `str` | 通知类型。常见值有 `generic`、`test`、`mail`、`system`、`serverchan`、`webhook`、`legacy_webhook`、`webhook_image`、`koishi`。通道可按需区分处理。 |
 | `title` | `str` | 通知标题。大多数通道都应使用。 |
 | `text` | `str` | 纯文本正文。通道的基础兜底内容。 |
-| `html` | `str \| None` | HTML 正文，主要供邮件等支持富文本的通道使用。 |
 | `serverchan_content` | `str` | ServerChan 使用的正文。未显式传入时等于 `text`。 |
 | `koishi_message` | `str` | Koishi 使用的消息文本。未显式传入时为 `"{title}\n\n{text}"`。 |
 | `signature` | `str` | 统一通知署名，来自 `notification` 插件配置。 |
+| `data` | `dict` | 结构化语义字段，例如代理是否成功、代理用户、任务名等。具体展示方式由通道决定。 |
+| `extra` | `dict` | 日志、图片、附件等补充内容。 |
 
-通道实现应该优先读取自己关心的字段，并对缺失字段使用合理兜底。例如系统通知通道读取 `title` 和 `text`，邮件通道读取 `html` 或 `text`，ServerChan 通道读取 `serverchan_content`。
+通道实现应该优先读取自己关心的字段，并对缺失字段使用合理兜底。例如系统通知通道读取 `title` 和 `text`，邮件通道根据 `title`、`text` 和 `data` 自行渲染邮件内容，ServerChan 通道读取 `serverchan_content`。
 
 ## 测试通知 payload
 
@@ -163,13 +165,12 @@ await notify.send_mail(
     "kind": "mail",
     "title": "标题",
     "mail_mode": "网页",
-    "html": "<b>正文</b>",
-    "text": "<b>正文</b>",
+    "mail_content": "<b>正文</b>",
     "to_address": "user@example.com",
 }
 ```
 
-当 `mode != "网页"` 时，`html` 为 `None`，邮件通道应使用 `text`。
+`mail_content` 是 mail 通道的兼容专用字段。普通广播通知不会携带 HTML 正文，邮件通道会根据 `title`、`text`、`data`、`signature` 和 `extra` 自行渲染 HTML 或纯文本。
 
 ### `send_serverchan`
 
@@ -331,6 +332,7 @@ class Plugin:
 
 - 管理自己的配置。
 - 解释自己关心的 payload 字段。
+- 按自身能力渲染格式，例如邮件通道自行生成 HTML，Koishi/Webhook 自行生成平台消息。
 - 执行具体发送逻辑。
 - 返回布尔发送结果。
 
