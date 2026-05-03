@@ -161,6 +161,22 @@ class NotifyService:
             "client_name": client_name,
         })
 
+    async def send_onebot(
+        self,
+        *,
+        title: str,
+        content: str,
+        target_type: str = "private",
+        target_id: int = 0,
+    ) -> bool:
+        return await self._send_to("onebot", {
+            "kind": "onebot",
+            "title": title,
+            "text": content,
+            "target_type": target_type,
+            "target_id": target_id,
+        })
+
     async def _broadcast(self, payload: dict[str, Any]) -> dict[str, bool]:
         if not self._channels:
             self.ctx.logger.warning("[notification] 无可用通知通道，通知已跳过")
