@@ -21,12 +21,12 @@ class NotifyService:
         if not channel_name:
             raise ValueError("通知通道名称不能为空")
         self._channels[channel_name] = channel
-        self.ctx.logger.info(f"[notification] 已注册通知通道: {channel_name}")
+        self.ctx.logger.info(f"已注册通知通道: {channel_name}")
 
     def unregister_channel(self, name: str) -> None:
         channel_name = str(name or "").strip()
         if self._channels.pop(channel_name, None) is not None:
-            self.ctx.logger.info(f"[notification] 已注销通知通道: {channel_name}")
+            self.ctx.logger.info(f"已注销通知通道: {channel_name}")
 
     def channels(self) -> list[str]:
         return sorted(self._channels)
@@ -179,7 +179,7 @@ class NotifyService:
 
     async def _broadcast(self, payload: dict[str, Any]) -> dict[str, bool]:
         if not self._channels:
-            self.ctx.logger.warning("[notification] 无可用通知通道，通知已跳过")
+            self.ctx.logger.warning("无可用通知通道，通知已跳过")
             return {}
 
         tasks = {
@@ -191,7 +191,7 @@ class NotifyService:
     async def _send_to(self, name: str, payload: dict[str, Any]) -> bool:
         channel = self._channels.get(name)
         if channel is None:
-            self.ctx.logger.warning(f"[notification] 通知通道未启用: {name}")
+            self.ctx.logger.warning(f"通知通道未启用: {name}")
             return False
         return await self._safe_send(name, channel, payload)
 
@@ -201,7 +201,7 @@ class NotifyService:
             return bool(result)
         except Exception as e:
             self.ctx.logger.warning(
-                f"[notification] 通道发送失败: channel={name}, error={type(e).__name__}: {e}"
+                f"通道发送失败: channel={name}, error={type(e).__name__}: {e}"
             )
             return False
 
@@ -218,9 +218,9 @@ class Plugin:
         config = Config.model_validate(raw_config)
         self.service = NotifyService(self.ctx, config)
         self.ctx.set("notify", self.service)
-        self.ctx.logger.info("[notification] notify 服务已启动")
+        self.ctx.logger.info("notify 服务已启动")
 
     async def on_stop(self, reason: str) -> None:
         if self.service is not None:
             self.service._channels.clear()
-        self.ctx.logger.info(f"[notification] 插件停止, reason={reason}")
+        self.ctx.logger.info(f"插件停止, reason={reason}")
