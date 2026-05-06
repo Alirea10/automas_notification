@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mas.plugins import PluginContext
+    from app.plugins import PluginContext
 
 from .schema import Config
 
