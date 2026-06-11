@@ -8,7 +8,7 @@ version = "0.0.4"
 description = "Notification orchestration service"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
-dependencies = ["pydantic>=2.0", "auto-mas-plugin-sdk>=5.2.0"]
+dependencies = ["pydantic>=2.0", "auto-mas-core>=5.2.0"]
 [project.entry-points."auto_mas.plugins"]
 notification = "notification.plugin:Plugin"
 

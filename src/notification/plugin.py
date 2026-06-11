@@ -6,6 +6,7 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.plugins import PluginContext
+    from app.plugins import PluginHttpRequest
 
 from .schema import Config
 
@@ -28,8 +29,24 @@ class NotifyService:
         if self._channels.pop(channel_name, None) is not None:
             self.ctx.logger.info(f"已注销通知通道: {channel_name}")
 
-    def channels(self) -> list[str]:
-        return sorted(self._channels)
+    def channels(self, detail: bool = False) -> list[str] | list[dict[str, Any]]:
+        if not detail:
+            return sorted(self._channels)
+
+        rows: list[dict[str, Any]] = []
+        for name in sorted(self._channels):
+            channel = self._channels[name]
+            config = getattr(channel, "config", None)
+            enabled = getattr(config, "enabled", None)
+            rows.append(
+                {
+                    "name": name,
+                    "type": type(channel).__name__,
+                    "enabled": bool(enabled) if enabled is not None else None,
+                    "supports_send": callable(getattr(channel, "send", None)),
+                }
+            )
+        return rows
 
     async def should_send_task_result(self, message: dict[str, Any]) -> bool:
         policy = self.config.send_task_result_time
@@ -58,6 +75,7 @@ class NotifyService:
         koishi_message: str | None = None,
         data: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
+        channels: list[str] | tuple[str, ...] | set[str] | str | None = None,
     ) -> dict[str, bool]:
         payload = {
             "kind": kind,
@@ -69,7 +87,38 @@ class NotifyService:
             "data": data or {},
             "extra": extra or {},
         }
-        return await self._broadcast(payload)
+        return await self.send_payload(payload, channels=channels)
+
+    async def send_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        channels: list[str] | tuple[str, ...] | set[str] | str | None = None,
+    ) -> dict[str, bool]:
+        if not isinstance(payload, dict):
+            raise ValueError("notification payload must be a dict")
+
+        normalized = dict(payload)
+        title = str(normalized.get("title") or "AUTO-MAS 通知")
+        text = str(normalized.get("text") or "")
+        normalized["title"] = title
+        normalized["text"] = text
+        normalized.setdefault("kind", "generic")
+        normalized.setdefault("serverchan_content", text)
+        normalized.setdefault("koishi_message", f"{title}\n\n{text}")
+        normalized.setdefault("signature", self.config.signature)
+        if not isinstance(normalized.get("data"), dict):
+            normalized["data"] = {}
+        if not isinstance(normalized.get("extra"), dict):
+            normalized["extra"] = {}
+
+        channel_names = self._normalize_channels(channels)
+        if channel_names is None:
+            return await self._broadcast(normalized)
+        return {
+            name: await self._send_to(name, normalized)
+            for name in channel_names
+        }
 
     async def send_test_notification(self) -> dict[str, bool]:
         text = (
@@ -177,6 +226,29 @@ class NotifyService:
             "target_id": target_id,
         })
 
+    @staticmethod
+    def _normalize_channels(
+        channels: list[str] | tuple[str, ...] | set[str] | str | None,
+    ) -> list[str] | None:
+        if channels is None:
+            return None
+        if isinstance(channels, str):
+            raw_items = [channels]
+        elif isinstance(channels, (list, tuple, set)):
+            raw_items = list(channels)
+        else:
+            raw_items = [channels]
+
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            name = str(item or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            result.append(name)
+        return result or None
+
     async def _broadcast(self, payload: dict[str, Any]) -> dict[str, bool]:
         if not self._channels:
             self.ctx.logger.warning("无可用通知通道，通知已跳过")
@@ -218,9 +290,72 @@ class Plugin:
         config = Config.model_validate(raw_config)
         self.service = NotifyService(self.ctx, config)
         self.ctx.set("notify", self.service)
+        self.ctx.server.http(
+            "/notification/channels",
+            self.handle_channels,
+            methods=["GET"],
+        )
+        self.ctx.server.http(
+            "/notification/send",
+            self.handle_send,
+            methods=["POST"],
+        )
+        self.ctx.server.http(
+            "/notification/test",
+            self.handle_test,
+            methods=["POST"],
+        )
         self.ctx.logger.info("notify 服务已启动")
 
     async def on_stop(self, reason: str) -> None:
         if self.service is not None:
             self.service._channels.clear()
         self.ctx.logger.info(f"插件停止, reason={reason}")
+
+    async def handle_channels(self, request: "PluginHttpRequest") -> dict[str, Any]:
+        if self.service is None:
+            return {"code": 503, "status": "error", "message": "notify service is unavailable"}
+
+        detail_raw = str(request.query.get("detail") or "").strip().lower()
+        detail = detail_raw in {"1", "true", "yes", "on"}
+        return {
+            "code": 200,
+            "status": "success",
+            "channels": self.service.channels(detail=detail),
+        }
+
+    async def handle_send(self, request: "PluginHttpRequest") -> dict[str, Any]:
+        if self.service is None:
+            return {"code": 503, "status": "error", "message": "notify service is unavailable"}
+        if not isinstance(request.json, dict):
+            return {"code": 400, "status": "error", "message": "request body must be a JSON object"}
+
+        body = dict(request.json)
+        channels = body.pop("channels", None)
+        title = str(body.get("title") or "").strip()
+        text = str(body.get("text") or "").strip()
+        if not title or not text:
+            return {"code": 400, "status": "error", "message": "title and text are required"}
+
+        result = await self.service.send_payload(body, channels=channels)
+        return {
+            "code": 200,
+            "status": "success",
+            "result": result,
+            "succeeded": sorted(name for name, ok in result.items() if ok),
+            "failed": sorted(name for name, ok in result.items() if not ok),
+        }
+
+    async def handle_test(self, request: "PluginHttpRequest") -> dict[str, Any]:
+        _ = request
+        if self.service is None:
+            return {"code": 503, "status": "error", "message": "notify service is unavailable"}
+
+        result = await self.service.send_test_notification()
+        return {
+            "code": 200,
+            "status": "success",
+            "result": result,
+            "succeeded": sorted(name for name, ok in result.items() if ok),
+            "failed": sorted(name for name, ok in result.items() if not ok),
+        }
