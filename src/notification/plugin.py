@@ -112,7 +112,9 @@ class NotifyService:
         if not isinstance(normalized.get("extra"), dict):
             normalized["extra"] = {}
 
-        channel_names = self._normalize_channels(channels)
+        channel_names = self.resolve_channels(channels)
+        if channel_names == []:
+            return {}
         if channel_names is None:
             return await self._broadcast(normalized)
         return {
@@ -227,9 +229,15 @@ class NotifyService:
         })
 
     @staticmethod
-    def _normalize_channels(
+    def resolve_channels(
         channels: list[str] | tuple[str, ...] | set[str] | str | None,
     ) -> list[str] | None:
+        """Normalize channel selection while preserving its three-state contract.
+
+        ``None`` means use the default broadcast behavior, an explicit empty
+        collection means do not send, and ``all`` requests a broadcast.
+        """
+
         if channels is None:
             return None
         if isinstance(channels, str):
@@ -245,9 +253,25 @@ class NotifyService:
             name = str(item or "").strip()
             if not name or name in seen:
                 continue
+            if name == "all":
+                return None
             seen.add(name)
             result.append(name)
-        return result or None
+        return result
+
+    @classmethod
+    def is_channel_selected(
+        cls,
+        channels: list[str] | tuple[str, ...] | set[str] | str | None,
+        channel: str,
+    ) -> bool:
+        """Return whether a channel is included by the supplied selection."""
+
+        channel_name = str(channel or "").strip()
+        if not channel_name:
+            return False
+        resolved = cls.resolve_channels(channels)
+        return resolved is None or channel_name in resolved
 
     async def _broadcast(self, payload: dict[str, Any]) -> dict[str, bool]:
         if not self._channels:
